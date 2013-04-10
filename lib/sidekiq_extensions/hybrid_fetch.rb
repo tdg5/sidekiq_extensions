@@ -1,6 +1,6 @@
 module SidekiqExtensions
 
-	module PriorityFetch
+	module HybridFetch
 
 		def initialize(options)
 			@strictly_ordered_queues = !!options[:strict]
