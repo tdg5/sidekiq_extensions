@@ -1,0 +1,31 @@
+PATH
+  remote: .
+  specs:
+    sidekiq_extensions (0.0.0)
+      sidekiq (= 2.8.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    celluloid (0.12.4)
+      facter (>= 1.6.12)
+      timers (>= 1.0.0)
+    connection_pool (1.0.0)
+    facter (1.6.18)
+    multi_json (1.7.2)
+    redis (3.0.3)
+    redis-namespace (1.2.1)
+      redis (~> 3.0.0)
+    sidekiq (2.8.0)
+      celluloid (~> 0.12.0)
+      connection_pool (~> 1.0)
+      multi_json (~> 1)
+      redis (~> 3)
+      redis-namespace
+    timers (1.1.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  sidekiq_extensions!
