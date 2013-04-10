@@ -8,4 +8,4 @@ module Sidekiq
 
 end
 
-Sidekiq.options[:queues] << config.host_queue unless config.options[:queues].include?(config.host_queue)
+Sidekiq.options[:queues] << Sidekiq.host_queue unless Sidekiq.options[:queues].include?(Sidekiq.host_queue)
