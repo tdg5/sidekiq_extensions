@@ -11,8 +11,9 @@ Gem::Specification.new do |gem|
 	gem.summary = 'Extensions for Sidekiq message processor'
 	gem.version = SidekiqExtensions::VERSION
 
-	gem.files = Dir['{lib}/**/*'] + %w[LICENSE README.md]
+	gem.files = `git ls-files`.split("\n")
 	gem.require_paths = %w[lib]
+	gem.test_files = Dir['test/*']
 
 	gem.add_dependency 'sidekiq', '2.8.0'
 end
