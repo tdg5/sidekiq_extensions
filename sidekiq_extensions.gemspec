@@ -16,4 +16,5 @@ Gem::Specification.new do |gem|
 	gem.test_files = Dir['test/*']
 
 	gem.add_dependency 'sidekiq', '2.8.0'
+	gem.add_development_dependency 'rake'
 end
