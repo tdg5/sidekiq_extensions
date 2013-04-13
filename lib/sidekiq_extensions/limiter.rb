@@ -78,8 +78,8 @@ module SidekiqExtensions
 
 
 		%w[counts_key locks_key].each do |key_method|
-			define_method(key_method) do
-				return self.class.send(key_method)
+			define_method(key_method) do |limit_type|
+				return self.class.send(key_method, limit_type)
 			end
 		end
 
