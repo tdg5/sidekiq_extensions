@@ -4,21 +4,20 @@ module SidekiqExtensions
 
 		EXCEEDED_CAPACITY_MAX_RETRIES = 10
 
+
+		def self.counts_key(limit_type)
+			return [limiter_key, limit_type, 'counts'].join(':')
+		end
+
+
 		def self.limiter_key
 			key = Sidekiq.options[:namespace].to_s
 			key += ':' unless key.blank?
 			return key + 'sidekiq_limiter'
 		end
 
-		%w[counts locks].each do |key_name|
-			self.define_method("#{key_name}_key") do |limit_type|
-				return [limiter_key, limit_type, key_name].join(':')
-			end
-
-
-			define_method("#{key_name}_key") do |limit_type|
-				return self.class.send("#{key_name}_key", limit_type)
-			end
+		def self.locks_key(limit_type)
+			return [limiter_key, limit_type, 'locks'].join(':')
 		end
 
 
@@ -75,6 +74,13 @@ module SidekiqExtensions
 
 		def exceeded_capacity_retry_count
 			return @message['exceeded_capacity_retry_count'] || 0
+		end
+
+
+		%w[counts_key locks_key].each do |key_method|
+			define_method(key_method) do
+				return self.class.send(key_method)
+			end
 		end
 
 
