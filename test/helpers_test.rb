@@ -22,6 +22,13 @@ class HelpersTest < MiniTest::Unit::TestCase
 	end
 
 
+	def test_remove_queue_raises_error_unless_queue_collection_responds_to_delete
+		assert_raises(ArgumentError) do
+			SidekiqExtensions.remove_queue('test', :from => :concurrency)
+		end
+	end
+
+
 	def test_remove_queue_removes_queue_from_queues_by_default
 		Sidekiq.options[:queues] = [@test_queue]
 		assert_equal Sidekiq.options[:queues][0], @test_queue
@@ -46,6 +53,20 @@ class HelpersTest < MiniTest::Unit::TestCase
 		assert_equal @test_queue, Sidekiq.options[:priority_queues][0]
 		SidekiqExtensions.remove_queue(@test_queue, :from => :priority_queues)
 		assert Sidekiq.options[:priority_queues].empty?, 'Queue was not successfully removed from target queue collection'
+	end
+
+
+	def test_remove_queue_can_target_multiple_queue_collections
+		require 'sidekiq_extensions/priority_queue'
+
+		assert_kind_of Array, Sidekiq.options[:priority_queues]
+		Sidekiq.options[:queues] = [@test_queue]
+		Sidekiq.options[:priority_queues] = [@test_queue]
+		assert_equal @test_queue, Sidekiq.options[:priority_queues][0]
+		assert_equal @test_queue, Sidekiq.options[:queues][0]
+		SidekiqExtensions.remove_queue(@test_queue, :from => [:priority_queues, :queues])
+		assert Sidekiq.options[:priority_queues].empty?, 'Queue was not successfully removed from target queue collection'
+		assert Sidekiq.options[:queues].empty?, 'Queue was not successfully removed from target queue collection'
 	end
 
 end

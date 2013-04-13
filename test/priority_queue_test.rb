@@ -8,6 +8,22 @@ class PriorityQueueTest < MiniTest::Unit::TestCase
 	end
 
 
+	def test_insertion_index_raises_an_error_if_reference_queue_not_found
+		Sidekiq.options[:priotiy_queues] = [@test_queue]
+		assert_raises(RuntimeError) do
+			SidekiqExtensions.prioritize_queue('foo', :before => 'bar')
+		end
+	end
+
+
+	def test_insertion_index_raises_an_error_if_self_referential
+		Sidekiq.options[:priotiy_queues] = [@test_queue]
+		assert_raises(ArgumentError) do
+			SidekiqExtensions.prioritize_queue('foo', :before => 'foo')
+		end
+	end
+
+
 	def test_priority_queue_exists
 		assert_kind_of Array, Sidekiq.options[:priority_queues]
 	end
@@ -26,22 +42,6 @@ class PriorityQueueTest < MiniTest::Unit::TestCase
 		end
 		assert_raises(ArgumentError) do
 			SidekiqExtensions.prioritize_queue(@test_queue, :prior_to => 'before_queue')
-		end
-	end
-
-
-	def test_prioritize_queue_raises_an_error_if_reference_queue_not_found
-		Sidekiq.options[:priotiy_queues] = [@test_queue]
-		assert_raises(RuntimeError) do
-			SidekiqExtensions.prioritize_queue('foo', :before => 'bar')
-		end
-	end
-
-
-	def test_prioritize_queue_raises_an_error_if_self_referential
-		Sidekiq.options[:priotiy_queues] = [@test_queue]
-		assert_raises(ArgumentError) do
-			SidekiqExtensions.prioritize_queue('foo', :before => 'foo')
 		end
 	end
 
