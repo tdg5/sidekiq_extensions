@@ -4,33 +4,35 @@ module SidekiqExtensions
 
 		EXCEEDED_CAPACITY_MAX_RETRIES = 10
 
-		def self.global_counts_key
-			return global_limiter_key + ':counts'
-		end
-
-		def self.global_limiter_key
+		def self.limiter_key
 			key = Sidekiq.options[:namespace].to_s
 			key += ':' unless key.blank?
 			return key + 'sidekiq_limiter'
 		end
 
+		%w[counts locks].each do |key_name|
+			self.define_method("#{key_name}_key") do |limit_type|
+				return [limiter_key, limit_type, key_name].join(':')
+			end
 
-		def self.global_locks_key
-			return global_limiter_key + ':locks'
+
+			define_method("#{key_name}_key") do |limit_type|
+				return self.class.send("#{key_name}_key", limit_type)
+			end
 		end
 
 
 		def allocate_worker
 			Sidekiq.redis do |connection|
-				return false unless connection.hsetnx(global_locks_key, worker_key, true)
+				return false unless connection.hsetnx(locks_key(:per_redis), worker_key, true)
 
 				begin
-					global_count = connection.hget(global_counts_key, worker_key)
-					return false if global_count && global_count.to_i >= @global_limit
-					connection.hincrby(global_counts_key, worker_key, 1)
+					global_count = connection.hget(counts_key(:per_redis), worker_key)
+					return false if global_count && global_count.to_i >= @redis_limit
+					connection.hincrby(counts_key(:per_redis), worker_key, 1)
 					return true
 				ensure
-					connection.hdel(global_locks_key, worker_key)
+					connection.hdel(locks_key(:per_redis), worker_key)
 				end
 			end
 		end
@@ -39,10 +41,12 @@ module SidekiqExtensions
 		def call(worker, message, queue)
 			@worker = worker
 			puts "Worker: #{worker.inspect}\nOption: #{options}\nMessage: #{message.inspect}\nQueue: #{queue.inspect}"
-			puts "Global Worker Count: #{Sidekiq.redis{|connection| connection.hget(global_counts_key, worker_key)}}"
-			@global_limit = options['global']
+			puts "Global Worker Count: #{Sidekiq.redis{|connection| connection.hget(counts_key(:per_redis), worker_key)}}"
+			@redis_limit = options['per_redis']
+			@host_limit = options['per_host']
+			@process_limit = options['per_process']
 
-			if @global_limit.nil?
+			unless @redis_limit || @host_limit || @process_limit
 				yield
 				return
 			end
@@ -65,7 +69,7 @@ module SidekiqExtensions
 
 
 		def decrement
-			Sidekiq.redis{|connection| connection.hincrby(global_counts_key, worker_key, -1)}
+			Sidekiq.redis{|connection| connection.hincrby(counts_key(:per_redis), worker_key, -1)}
 		end
 
 
@@ -74,19 +78,17 @@ module SidekiqExtensions
 		end
 
 
-		%w[global_counts_key global_locks_key].each do |key_method|
-			define_method(key_method) do
-				return self.class.send(key_method)
-			end
+		def exceeded_capacity_max_retries
+			return fetch_option(:exceeded_capacity_max_retries, EXCEEDED_CAPACITY_MAX_RETRIES)
 		end
 
 
-		def exceeded_capacity_max_retries
-			[options.fetch('exceeded_capacity_max_retries', nil), Sidekiq.options.fetch(:limiter, {}).fetch(:exceeded_capacity_max_retries, nil)].compact.each do |option|
+		def fetch_option(option_name, default = nil)
+			[options.fetch(option_name.to_s, nil), Sidekiq.options.fetch(:limiter, {}).fetch(option_name.to_sym, nil)].compact.each do |option|
 				return option.call(@message) if option.respond_to?(:call)
 				return option
 			end
-			return EXCEEDED_CAPACITY_MAX_RETRIES
+			return default
 		end
 
 
@@ -96,13 +98,9 @@ module SidekiqExtensions
 
 
 		def retry_delay
-			[options.fetch('exceeded_capacity_retry_delay', nil), Sidekiq.options.fetch(:limiter, {}).fetch(:exceeded_capacity_retry_delay, nil)].compact.each do |option|
-				return option.call(@message) if option.respond_to?(:call)
-				return option
-			end
-
 			# By default will retry 10 times over the course of about 5 hours
-			return (exceeded_capacity_retry_count ** 4) + 15 + (rand(50) * (exceeded_capacity_retry_count + 1))
+			default = (exceeded_capacity_retry_count ** 4) + 15 + (rand(50) * (exceeded_capacity_retry_count + 1))
+			return fetch_option(:exceeded_capacity_retry_delay, default)
 		end
 
 
