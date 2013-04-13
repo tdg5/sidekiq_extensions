@@ -9,7 +9,7 @@ module SidekiqExtensions
 		end
 		insert_at = insertion_index(queue_name.to_s, position.keys[0], position.values[0].to_s)
 		remove_queue(queue_name, :from => [:priority_queues, :queues])
-		Sidekiq.options[:priority_queues].insert(insert_at, queue.to_s)
+		Sidekiq.options[:priority_queues].insert(insert_at, queue_name.to_s)
 	end
 
 
