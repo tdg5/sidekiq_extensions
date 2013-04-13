@@ -7,10 +7,9 @@ module SidekiqExtensions
 		unless position.empty? || position.length == 1 && [:after, :before].include?(position.keys[0])
 			raise ArgumentError, 'Invalid position argument. Position expects only one option with a key of :before or :after'
 		end
-		queue = queue_name.to_s
-		insert_at = insertion_index(queue, position.keys[0], position.values[0].to_s)
-		remove_queue(queue, :from => [:priority_queues, :queues])
-		Sidekiq.options[:priority_queues].insert(insert_at, queue)
+		insert_at = insertion_index(queue_name.to_s, position.keys[0], position.values[0].to_s)
+		remove_queue(queue_name, :from => [:priority_queues, :queues])
+		Sidekiq.options[:priority_queues].insert(insert_at, queue.to_s)
 	end
 
 
