@@ -4,15 +4,15 @@ module SidekiqExtensions
 
 	def self.prioritize_queue(queue_name, position = {})
 		raise ArgumentError, "Invalid queue name of class #{queue_name.class}" unless [String, Symbol].include?(queue_name.class)
-		unless position.empty? || position.length == 1 && [:before, :after].include?(position.keys[0])
+		unless position.empty? || position.length == 1 && [:after, :before].include?(position.keys[0])
 			raise ArgumentError, 'Invalid position argument. Position expects only one option with a key of :before or :after'
 		end
-		queue = queue_name.to_s
-		insert_at = insertion_index(queue, position.keys[0], position.values[0].to_s)
-		remove_queue(queue, :from => :priority_queues)
-		Sidekiq.options[:priority_queues].insert(insert_at, queue)
-		remove_queue(queue)
+		insert_at = insertion_index(queue_name.to_s, position.keys[0], position.values[0].to_s)
+		remove_queue(queue_name, :from => :priority_queues)
+		remove_queue(queue_name)
+		Sidekiq.options[:priority_queues].insert(insert_at, queue_name.to_s)
 	end
+
 
 	private
 	def self.insertion_index(queue, position = nil, reference_queue = nil)
