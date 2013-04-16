@@ -1,5 +1,3 @@
 require 'sidekiq'
 
-module SidekiqExtensions
-
-end
+module SidekiqExtensions; end
