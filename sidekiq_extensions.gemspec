@@ -16,5 +16,7 @@ Gem::Specification.new do |gem|
 	gem.test_files = Dir['test/*']
 
 	gem.add_dependency 'sidekiq', '2.8.0'
+	gem.add_dependency 'activesupport', '3.2.12'
+	gem.add_dependency 'mlanett-redis-lock', '~> 0.2.2'
 	gem.add_development_dependency 'rake'
 end
