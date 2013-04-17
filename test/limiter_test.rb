@@ -56,6 +56,7 @@ class LimiterTest < MiniTest::Unit::TestCase
 	def test_allocate_worker_returns_true_if_no_limit_met
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		@limiter.instance_variable_set(:@worker, TestWorker.new)
+		@limiter.instance_variable_set(:@message, @valid_message)
 		Redis::Namespace.any_instance.expects(:hincrby).times(SidekiqExtensions::Limiter::PRIORITIZED_COUNT_SCOPES.count)
 		assert @limiter.allocate_worker
 	end
@@ -71,6 +72,23 @@ class LimiterTest < MiniTest::Unit::TestCase
 		TestWorker.sidekiq_options(:limits => {:key => 'test_worker_key'})
 		@limiter.instance_variable_set(:@worker, TestWorker.new)
 		assert_equal 'sidekiq_extensions:limiter:test_worker_key:counts', @limiter.counts_key_for_worker
+	end
+
+
+	def test_key_for_scope_returns_expected_values
+		host_name = 'test_host'
+		Socket.expects(:gethostname).twice.returns(host_name)
+		Process.expects(:pid).returns(1234)
+		@limiter.instance_variable_set(:@message, @valid_message)
+		expected_values = {
+			SidekiqExtensions::Limiter::PER_HOST_KEY => "#{SidekiqExtensions::Limiter::PER_HOST_KEY}:#{host_name}",
+			SidekiqExtensions::Limiter::PER_PROCESS_KEY => "#{SidekiqExtensions::Limiter::PER_PROCESS_KEY}:#{host_name}:1234",
+			SidekiqExtensions::Limiter::PER_QUEUE_KEY => "#{SidekiqExtensions::Limiter::PER_QUEUE_KEY}:#{@valid_message['queue']}",
+			SidekiqExtensions::Limiter::PER_REDIS_KEY => SidekiqExtensions::Limiter::PER_REDIS_KEY,
+		}
+		SidekiqExtensions::Limiter::PRIORITIZED_COUNT_SCOPES.each do |scope|
+			assert_equal expected_values[scope], @limiter.key_for_scope(scope)
+		end
 	end
 
 

@@ -1,4 +1,5 @@
 require 'redis-lock'
+require 'socket'
 
 module SidekiqExtensions
 
@@ -15,7 +16,7 @@ module SidekiqExtensions
 		def adjust_counts(adjustment, existing_connection = nil)
 			adjuster = lambda do |connection|
 				limited_scopes.each do |limited_scope|
-					connection.hincrby(counts_key_for_worker, limited_scope, adjustment)
+					connection.hincrby(counts_key_for_worker, key_for_scope(limited_scope), adjustment)
 				end
 			end
 			existing_connection ? adjuster.call(existing_connection) : Sidekiq.redis(&adjuster)
@@ -69,7 +70,7 @@ module SidekiqExtensions
 
 
 		def counts_key_for_worker
-			return [limiter_key, worker_key, 'counts'].map(&:to_s).join(':')
+			return namespaceify(limiter_key, worker_key, 'counts')
 		end
 
 
@@ -81,13 +82,27 @@ module SidekiqExtensions
 		end
 
 
+		def key_for_scope(scope)
+			return case scope
+			when PER_REDIS_KEY
+				scope
+			when PER_QUEUE_KEY
+				namespaceify(scope, @message['queue'])
+			when PER_HOST_KEY
+				namespaceify(scope, Socket.gethostname)
+			when PER_PROCESS_KEY
+				namespaceify(scope, Socket.gethostname, Process.pid)
+			end
+		end
+
+
 		def limited_scopes
 			return options.keys.map(&:to_sym) & PRIORITIZED_COUNT_SCOPES
 		end
 
 
 		def limiter_key
-			return [Sidekiq.options[:namespace], :sidekiq_extensions, :limiter].compact.map(&:to_s).join(':')
+			return namespaceify(Sidekiq.options[:namespace], :sidekiq_extensions, :limiter)
 		end
 
 
@@ -98,6 +113,11 @@ module SidekiqExtensions
 
 		def max_retries
 			return fetch_option(:retry, MAX_RETRIES) || 0
+		end
+
+
+		def namespaceify(*components)
+			return components.compact.map(&:to_s).join(':')
 		end
 
 
