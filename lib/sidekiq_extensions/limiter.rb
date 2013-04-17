@@ -91,11 +91,6 @@ module SidekiqExtensions
 		end
 
 
-		def limiter_key_for_worker
-			return [limiter_key, worker_key].join(':')
-		end
-
-
 		def limiter_retry_count
 			return @message['limiter_retry_count'] || 0
 		end

@@ -125,9 +125,7 @@ class LimiterTest < MiniTest::Unit::TestCase
 	def test_limiter_yields_immediately_with_no_limited_scopes
 		TestWorker.sidekiq_options(:limits => {})
 		@limiter.expects(:allocate_worker).never
-		assert_raises(LocalJumpError) do
-			@limiter.call(TestWorker.new, {}, 'test')
-		end
+		@limiter.call(TestWorker.new, {}, 'test') {}
 	end
 
 
