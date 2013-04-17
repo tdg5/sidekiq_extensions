@@ -58,7 +58,7 @@ module SidekiqExtensions
 			if @worker.respond_to?(:retry)
 				@worker.retry
 			else
-				max_retries ? schedule_retry : raise("Unable to allocate worker #{@worker.class.name}")
+				max_retries ? try_retry : raise("Unable to allocate worker #{@worker.class.name}")
 			end
 		end
 
@@ -78,20 +78,6 @@ module SidekiqExtensions
 			[options.fetch(option_name.to_s, nil), Sidekiq.options.fetch(:limiter, {}).fetch(option_name.to_sym, nil), default].compact.each do |option|
 				return option.call(@message) if option.respond_to?(:call)
 				return option
-			end
-		end
-
-
-		def key_for_scope(scope)
-			return case scope
-			when PER_REDIS_KEY
-				scope
-			when PER_QUEUE_KEY
-				namespaceify(scope, @message['queue'])
-			when PER_HOST_KEY
-				namespaceify(scope, Socket.gethostname)
-			when PER_PROCESS_KEY
-				namespaceify(scope, Socket.gethostname, Process.pid)
 			end
 		end
 
@@ -138,7 +124,14 @@ module SidekiqExtensions
 		end
 
 
-		def schedule_retry
+		def schedule_retry(delay)
+			Sidekiq.redis do |connection|
+				connection.zadd('retry', (Time.now.to_f + delay).to_s, Sidekiq.dump_json(@message))
+			end
+		end
+
+
+		def try_retry
 			unless limiter_retry_count < max_retries
 				raise "Capacity limit reached! Unable to allocate worker #{@worker.class.name}. All retries in the event of capacity limit have been exhausted."
 			end
@@ -146,10 +139,7 @@ module SidekiqExtensions
 			delay = retry_delay
 			@message['limiter_retry_count'] = limiter_retry_count + 1
 			Sidekiq.logger.debug {"Capacity limit reached! Unable to allocate worker #{@worker.class.name}. Retry ##{limiter_retry_count} in #{delay} seconds."}
-
-			Sidekiq.redis do |connection|
-				connection.zadd('retry', (Time.now.to_f + delay).to_s, Sidekiq.dump_json(@message))
-			end
+			schedule_retry(delay)
 		end
 
 
@@ -159,7 +149,12 @@ module SidekiqExtensions
 
 
 		def worker_scopes_keys
-			return @worker_scopes_keys ||= limited_scopes.map{|scope| key_for_scope(scope)}
+			return @worker_scopes_keys ||= {
+				PER_REDIS_KEY => PER_REDIS_KEY.to_s,
+				PER_QUEUE_KEY => namespaceify(PER_QUEUE_KEY, @message['queue']),
+				PER_HOST_KEY => namespaceify(PER_HOST_KEY, Socket.gethostname),
+				PER_PROCESS_KEY => namespaceify(PER_PROCESS_KEY, Socket.gethostname, Process.pid),
+			}.values_at(*limited_scopes)
 		end
 
 	end

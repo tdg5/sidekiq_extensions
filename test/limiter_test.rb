@@ -92,23 +92,6 @@ class LimiterTest < MiniTest::Unit::TestCase
 	end
 
 
-	def test_key_for_scope_returns_expected_values
-		host_name = 'test_host'
-		Socket.expects(:gethostname).twice.returns(host_name)
-		Process.expects(:pid).returns(1234)
-		@limiter.instance_variable_set(:@message, @valid_message)
-		expected_values = {
-			SidekiqExtensions::Limiter::PER_HOST_KEY => "#{SidekiqExtensions::Limiter::PER_HOST_KEY}:#{host_name}",
-			SidekiqExtensions::Limiter::PER_PROCESS_KEY => "#{SidekiqExtensions::Limiter::PER_PROCESS_KEY}:#{host_name}:1234",
-			SidekiqExtensions::Limiter::PER_QUEUE_KEY => "#{SidekiqExtensions::Limiter::PER_QUEUE_KEY}:#{@valid_message['queue']}",
-			SidekiqExtensions::Limiter::PER_REDIS_KEY => SidekiqExtensions::Limiter::PER_REDIS_KEY,
-		}
-		SidekiqExtensions::Limiter::PRIORITIZED_COUNT_SCOPES.each do |scope|
-			assert_equal expected_values[scope], @limiter.key_for_scope(scope)
-		end
-	end
-
-
 	def test_limited_scopes_returns_expected_values
 		limits = Hash[SidekiqExtensions::Limiter::PRIORITIZED_COUNT_SCOPES.map{|scope| [scope, 1]}]
 		scopes = limits.keys
@@ -226,6 +209,23 @@ class LimiterTest < MiniTest::Unit::TestCase
 
 		Sidekiq.options[:limiter][:test] = nil
 		assert_equal 'baz',  @limiter.fetch_option(:test, default)
+	end
+
+
+	def test_worker_scopes_keys_returns_expected_values
+		host_name = 'test_host'
+		Socket.expects(:gethostname).twice.returns(host_name)
+		Process.expects(:pid).returns(1234)
+		TestWorker.sidekiq_options(:limits => @valid_limit_options)
+		@limiter.instance_variable_set(:@worker, TestWorker.new)
+		@limiter.instance_variable_set(:@message, @valid_message)
+		expected_values = [
+			SidekiqExtensions::Limiter::PER_REDIS_KEY.to_s,
+			"#{SidekiqExtensions::Limiter::PER_QUEUE_KEY}:#{@valid_message['queue']}",
+			"#{SidekiqExtensions::Limiter::PER_HOST_KEY}:#{host_name}",
+			"#{SidekiqExtensions::Limiter::PER_PROCESS_KEY}:#{host_name}:1234",
+		]
+		assert_equal expected_values, @limiter.worker_scopes_keys
 	end
 
 end
