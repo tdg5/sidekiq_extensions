@@ -15,8 +15,8 @@ module SidekiqExtensions
 
 		def adjust_counts(adjustment, existing_connection = nil)
 			adjuster = lambda do |connection|
-				limited_scopes.each do |limited_scope|
-					connection.hincrby(counts_key_for_worker, key_for_scope(limited_scope), adjustment)
+				worker_scopes_keys.each do |worker_scope_key|
+					connection.hincrby(counts_key_for_worker, worker_scope_key, adjustment)
 				end
 			end
 			existing_connection ? adjuster.call(existing_connection) : Sidekiq.redis(&adjuster)
@@ -64,7 +64,7 @@ module SidekiqExtensions
 
 
 		def capacity_available?(connection)
-			current_counts = connection.hmget(counts_key_for_worker, limited_scopes).map(&:to_i)
+			current_counts = connection.hmget(counts_key_for_worker, worker_scopes_keys).map(&:to_i)
 			return prioritized_limits.zip(current_counts).map{|counts| counts.inject(:-)}.none?{|count_diff| count_diff <= 0}
 		end
 
@@ -154,7 +154,12 @@ module SidekiqExtensions
 
 
 		def worker_key
-			@worker_key ||= fetch_option(:key, @worker.class.to_s.underscore.gsub('/', ':'))
+			return @worker_key ||= fetch_option(:key, @worker.class.to_s.underscore.gsub('/', ':'))
+		end
+
+
+		def worker_scopes_keys
+			return @worker_scopes_keys ||= limited_scopes.map{|scope| key_for_scope(scope)}
 		end
 
 	end

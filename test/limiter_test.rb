@@ -1,5 +1,6 @@
 require 'test_helper'
 require 'sidekiq_extensions/limiter'
+require 'debugger'
 
 class LimiterTest < MiniTest::Unit::TestCase
 
@@ -26,12 +27,14 @@ class LimiterTest < MiniTest::Unit::TestCase
 			'retry' => true,
 		}
 		TestWorker.sidekiq_options_hash = nil
+		Sidekiq.redis{|connection| connection.flushdb}
 	end
 
 
 	def test_allocate_worker_returns_false_if_any_limit_at_capacity
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		@limiter.instance_variable_set(:@worker, TestWorker.new)
+		@limiter.instance_variable_set(:@message, @valid_message)
 		Redis::Namespace.any_instance.expects(:hmget).once.returns([94, 93, 92, 91])
 		refute @limiter.allocate_worker
 	end
@@ -40,6 +43,7 @@ class LimiterTest < MiniTest::Unit::TestCase
 	def test_allocate_worker_returns_false_if_lock_cannot_be_obtained
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		@limiter.instance_variable_set(:@worker, TestWorker.new)
+		@limiter.instance_variable_set(:@message, @valid_message)
 		Redis::Namespace.any_instance.expects(:lock).once.raises(Redis::Lock::LockNotAcquired)
 		refute @limiter.allocate_worker
 	end
@@ -57,6 +61,20 @@ class LimiterTest < MiniTest::Unit::TestCase
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		@limiter.instance_variable_set(:@worker, TestWorker.new)
 		@limiter.instance_variable_set(:@message, @valid_message)
+		Redis::Namespace.any_instance.expects(:hincrby).times(SidekiqExtensions::Limiter::PRIORITIZED_COUNT_SCOPES.count)
+		assert @limiter.allocate_worker
+	end
+
+
+	def test_allocate_worker_returns_true_regardless_of_jobs_that_do_not_relate_to_current_worker_context
+		TestWorker.sidekiq_options(:limits => @valid_limit_options)
+		@limiter.instance_variable_set(:@worker, TestWorker.new)
+		@limiter.instance_variable_set(:@message, @valid_message)
+		Sidekiq.redis do |connection|
+			@limiter.worker_scopes_keys.each do |worker_scope_key|
+				connection.hincrby(@limiter.counts_key_for_worker, "unrelated:#{worker_scope_key}", 4)
+			end
+		end
 		Redis::Namespace.any_instance.expects(:hincrby).times(SidekiqExtensions::Limiter::PRIORITIZED_COUNT_SCOPES.count)
 		assert @limiter.allocate_worker
 	end
