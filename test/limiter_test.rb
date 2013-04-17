@@ -1,6 +1,5 @@
 require 'test_helper'
 require 'sidekiq_extensions/limiter'
-require 'debugger'
 
 class LimiterTest < MiniTest::Unit::TestCase
 
