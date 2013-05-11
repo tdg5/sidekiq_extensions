@@ -13,30 +13,6 @@ module SidekiqExtensions
 		PRIORITIZED_COUNT_SCOPES = [PER_REDIS_KEY, PER_QUEUE_KEY, PER_HOST_KEY, PER_PROCESS_KEY]
 
 
-		def adjust_counts(adjustment, existing_connection = nil)
-			adjuster = lambda do |connection|
-				worker_scopes_keys.each do |worker_scope_key|
-					connection.hincrby(counts_key_for_worker, worker_scope_key, adjustment)
-				end
-			end
-			existing_connection ? adjuster.call(existing_connection) : Sidekiq.redis(&adjuster)
-		end
-
-
-		def allocate_worker
-			Sidekiq.redis do |connection|
-				return false unless capacity_available?(connection)
-				connection.lock(worker_key) do |lock|
-					return false unless capacity_available?(connection)
-					adjust_counts(1, connection)
-				end
-			end
-			return true
-		rescue Redis::Lock::LockNotAcquired
-			return false
-		end
-
-
 		def call(worker, message, queue)
 			@worker = worker
 			if limited_scopes.empty?
@@ -51,7 +27,7 @@ module SidekiqExtensions
 					yield
 					return
 				ensure
-					adjust_counts(-1)
+					update_worker_scopes(:unregister)
 				end
 			end
 
@@ -62,15 +38,27 @@ module SidekiqExtensions
 			end
 		end
 
+		protected
 
-		def capacity_available?(connection)
-			current_counts = connection.hmget(counts_key_for_worker, worker_scopes_keys).map(&:to_i)
-			return prioritized_limits.zip(current_counts).map{|counts| counts.inject(:-)}.none?{|count_diff| count_diff <= 0}
+		def allocate_worker
+			Sidekiq.redis do |connection|
+				return false unless capacity_available?(connection)
+				connection.lock(worker_key) do |lock|
+					return false unless capacity_available?(connection)
+					update_worker_scopes(:register, connection)
+				end
+			end
+			return true
+		rescue Redis::Lock::LockNotAcquired
+			return false
 		end
 
 
-		def counts_key_for_worker
-			return namespaceify(limiter_key, worker_key, 'counts')
+		def capacity_available?(connection, skip_purge_and_retry = false)
+			availability = prioritized_limits.zip(worker_scopes_counts(connection)).map{|counts| counts.inject(:-)}.none?{|count_diff| count_diff <= 0}
+			return availability if availability || skip_purge_and_retry
+			purge_stale_workers(connection)
+			capacity_available?(connection, true)
 		end
 
 
@@ -117,6 +105,28 @@ module SidekiqExtensions
 		end
 
 
+		def purge_stale_workers(connection)
+			connection.multi do
+				worker_scopes_keys.each do |scope_key|
+					connection.sinterstore(scope_key, scope_key, 'workers')
+				end
+			end
+		end
+
+
+		def update_worker_scopes(action, existing_connection = nil)
+			command = action == :register ? 'sadd' : 'srem'
+			adjuster = lambda do |connection|
+				connection.multi do
+					worker_scopes_keys.each do |worker_scope_key|
+						connection.send(command, worker_scope_key, worker_identity)
+					end
+				end
+			end
+			existing_connection ? adjuster.call(existing_connection) : Sidekiq.redis(&adjuster)
+		end
+
+
 		def retry_delay
 			# By default will retry 10 times over the course of about 5 hours
 			default = lambda{|message| (limiter_retry_count ** 4) + 15 + (rand(50) * (limiter_retry_count + 1))}
@@ -143,17 +153,30 @@ module SidekiqExtensions
 		end
 
 
+		def worker_identity
+			return "#{Socket.gethostname}:#{Process.pid}-#{Thread.current.object_id}:default"
+		end
+
+
 		def worker_key
-			return @worker_key ||= fetch_option(:key, @worker.class.to_s.underscore.gsub('/', ':'))
+			return @worker_key ||= namespaceify(limiter_key, fetch_option(:key, @worker.class.to_s.underscore.gsub('/', ':')))
+		end
+
+
+		def worker_scopes_counts(connection)
+			current_counts = connection.multi do
+				worker_scopes_keys.map{|key| connection.scard(key)}
+			end
+			return current_counts.map(&:to_i)
 		end
 
 
 		def worker_scopes_keys
 			return @worker_scopes_keys ||= {
-				PER_REDIS_KEY => PER_REDIS_KEY.to_s,
-				PER_QUEUE_KEY => namespaceify(PER_QUEUE_KEY, @message['queue']),
-				PER_HOST_KEY => namespaceify(PER_HOST_KEY, Socket.gethostname),
-				PER_PROCESS_KEY => namespaceify(PER_PROCESS_KEY, Socket.gethostname, Process.pid),
+				PER_REDIS_KEY => namespaceify(worker_key, PER_REDIS_KEY.to_s),
+				PER_QUEUE_KEY => namespaceify(worker_key, PER_QUEUE_KEY, @message['queue']),
+				PER_HOST_KEY => namespaceify(worker_key, PER_HOST_KEY, Socket.gethostname),
+				PER_PROCESS_KEY => namespaceify(worker_key, PER_PROCESS_KEY, Socket.gethostname, Process.pid),
 			}.values_at(*limited_scopes)
 		end
 

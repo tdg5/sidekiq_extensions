@@ -30,21 +30,12 @@ class LimiterTest < MiniTest::Unit::TestCase
 	end
 
 
-	def test_allocate_worker_returns_false_if_any_limit_at_capacity
-		TestWorker.sidekiq_options(:limits => @valid_limit_options)
-		@limiter.instance_variable_set(:@worker, TestWorker.new)
-		@limiter.instance_variable_set(:@message, @valid_message)
-		Redis::Namespace.any_instance.expects(:hmget).once.returns([94, 93, 92, 91])
-		refute @limiter.allocate_worker
-	end
-
-
 	def test_allocate_worker_returns_false_if_lock_cannot_be_obtained
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		@limiter.instance_variable_set(:@worker, TestWorker.new)
 		@limiter.instance_variable_set(:@message, @valid_message)
 		Redis::Namespace.any_instance.expects(:lock).once.raises(Redis::Lock::LockNotAcquired)
-		refute @limiter.allocate_worker
+		refute @limiter.send(:allocate_worker)
 	end
 
 
@@ -52,7 +43,7 @@ class LimiterTest < MiniTest::Unit::TestCase
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		@limiter.instance_variable_set(:@worker, TestWorker.new)
 		@limiter.expects(:capacity_available?).twice.returns(true).then.returns(false)
-		refute @limiter.allocate_worker
+		refute @limiter.send(:allocate_worker)
 	end
 
 
@@ -60,35 +51,29 @@ class LimiterTest < MiniTest::Unit::TestCase
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		@limiter.instance_variable_set(:@worker, TestWorker.new)
 		@limiter.instance_variable_set(:@message, @valid_message)
-		Redis::Namespace.any_instance.expects(:hincrby).times(SidekiqExtensions::Limiter::PRIORITIZED_COUNT_SCOPES.count)
-		assert @limiter.allocate_worker
+		@limiter.expects(:update_worker_scopes).once
+		assert @limiter.send(:allocate_worker)
 	end
 
 
-	def test_allocate_worker_returns_true_regardless_of_jobs_that_do_not_relate_to_current_worker_context
+	def test_capacity_availiable_returns_false_if_any_limit_at_capacity
+		TestWorker.sidekiq_options(:limits => @valid_limit_options)
+		@limiter.instance_variable_set(:@worker, TestWorker.new)
+		@limiter.instance_variable_set(:@message, @valid_message)
+		@limiter.expects(:worker_scopes_counts).times(2).returns([99, 99, 99, 99])
+		refute @limiter.send(:allocate_worker)
+	end
+
+
+	def test_capacity_available_tries_purging_stale_workers
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		@limiter.instance_variable_set(:@worker, TestWorker.new)
 		@limiter.instance_variable_set(:@message, @valid_message)
 		Sidekiq.redis do |connection|
-			@limiter.worker_scopes_keys.each do |worker_scope_key|
-				connection.hincrby(@limiter.counts_key_for_worker, "unrelated:#{worker_scope_key}", 4)
-			end
+			@limiter.send(:worker_scopes_keys).each{|scope_key| connection.sadd(scope_key, 'stale_worker')}
+			refute @limiter.send(:capacity_available?, connection, true)
+			assert @limiter.send(:capacity_available?, connection)
 		end
-		Redis::Namespace.any_instance.expects(:hincrby).times(SidekiqExtensions::Limiter::PRIORITIZED_COUNT_SCOPES.count)
-		assert @limiter.allocate_worker
-	end
-
-
-	def test_counts_key_for_worker_returns_expected_values
-		@limiter.instance_variable_set(:@worker, TestWorker.new)
-		assert_equal 'sidekiq_extensions:limiter:limiter_test:test_worker:counts', @limiter.counts_key_for_worker
-	end
-
-
-	def test_counts_key_for_worker_uses_custom_worker_key
-		TestWorker.sidekiq_options(:limits => {:key => 'test_worker_key'})
-		@limiter.instance_variable_set(:@worker, TestWorker.new)
-		assert_equal 'sidekiq_extensions:limiter:test_worker_key:counts', @limiter.counts_key_for_worker
 	end
 
 
@@ -99,24 +84,8 @@ class LimiterTest < MiniTest::Unit::TestCase
 		@limiter.instance_variable_set(:@worker, TestWorker.new)
 		until limits.empty?
 			@limiter.instance_variable_set(:@options, nil)
-			assert_equal scopes, @limiter.limited_scopes
+			assert_equal scopes, @limiter.send(:limited_scopes)
 			TestWorker.sidekiq_options_hash['limits'].delete(scopes.delete(scopes.sample))
-		end
-	end
-
-
-	def test_limiter_decrements_counts_even_on_failure
-		expected = 1
-		Redis::Namespace.any_instance.expects(:hmget).times(4).returns([0] * 4)
-		@limiter.expects(:adjust_counts).times(4).with do |adjustment, connection|
-			(adjustment == expected) && (expected *= -1)
-		end
-		TestWorker.sidekiq_options(:limits => @valid_limit_options)
-		@limiter.call(TestWorker.new, @valid_message, 'test') {}
-		assert_raises(RuntimeError) do
-			@limiter.call(TestWorker.new, @valid_message, 'test') do
-				raise 'He\'s dead, Jim'
-			end
 		end
 	end
 
@@ -133,10 +102,26 @@ class LimiterTest < MiniTest::Unit::TestCase
 
 
 	def test_limiter_key_returns_expected_keys
-		assert_equal 'sidekiq_extensions:limiter', @limiter.limiter_key
+		assert_equal 'sidekiq_extensions:limiter', @limiter.send(:limiter_key)
 		Sidekiq.options[:namespace] = 'test'
-		assert_equal 'test:sidekiq_extensions:limiter', @limiter.limiter_key
+		assert_equal 'test:sidekiq_extensions:limiter', @limiter.send(:limiter_key)
 		Sidekiq.options[:namespace] = nil
+	end
+
+
+	def test_limiter_unregisters_worker_even_on_failure
+		expected = :register
+		@limiter.expects(:worker_scopes_counts).times(4).returns([0] * 4)
+		@limiter.expects(:update_worker_scopes).times(4).with do |adjustment, connection|
+			(adjustment == expected) && (expected = (expected == :register ? :unregister : :register))
+		end
+		TestWorker.sidekiq_options(:limits => @valid_limit_options)
+		@limiter.call(TestWorker.new, @valid_message, 'test') {}
+		assert_raises(RuntimeError) do
+			@limiter.call(TestWorker.new, @valid_message, 'test') do
+				raise 'He\'s dead, Jim'
+			end
+		end
 	end
 
 
@@ -144,6 +129,31 @@ class LimiterTest < MiniTest::Unit::TestCase
 		TestWorker.sidekiq_options(:limits => {})
 		@limiter.expects(:allocate_worker).never
 		@limiter.call(TestWorker.new, {}, 'test') {}
+	end
+
+
+	def test_purge_stale_workers_does_not_affect_active_workers
+		TestWorker.sidekiq_options(:limits => @valid_limit_options)
+		@limiter.instance_variable_set(:@worker, TestWorker.new)
+		@limiter.instance_variable_set(:@message, @valid_message)
+		Sidekiq.redis do |connection|
+			connection.sadd('workers', 'active_worker')
+			@limiter.send(:worker_scopes_keys).each{|scope_key| connection.sadd(scope_key, 'active_worker')}
+			@limiter.send(:purge_stale_workers, connection)
+			assert_equal [1, 1, 1, 1], @limiter.send(:worker_scopes_counts, connection)
+		end
+	end
+
+
+	def test_purge_stale_workers_purges_stale_workers
+		TestWorker.sidekiq_options(:limits => @valid_limit_options)
+		@limiter.instance_variable_set(:@worker, TestWorker.new)
+		@limiter.instance_variable_set(:@message, @valid_message)
+		Sidekiq.redis do |connection|
+			@limiter.send(:worker_scopes_keys).each{|scope_key| connection.sadd(scope_key, 'stale_worker')}
+			@limiter.send(:purge_stale_workers, connection)
+			assert_equal [0, 0, 0, 0], @limiter.send(:worker_scopes_counts, connection)
+		end
 	end
 
 
@@ -179,7 +189,7 @@ class LimiterTest < MiniTest::Unit::TestCase
 		Redis::Namespace.any_instance.expects(:zadd).once
 		Sidekiq.expects(:dump_json).with(@valid_message)
 		@limiter.call(TestWorker.new, @valid_message, 'test') {}
-		assert_equal 2, @limiter.limiter_retry_count
+		assert_equal 2, @limiter.send(:limiter_retry_count)
 	end
 
 
@@ -201,14 +211,32 @@ class LimiterTest < MiniTest::Unit::TestCase
 		@limiter.instance_variable_set(:@worker, worker = TestWorker.new)
 		@limiter.instance_variable_set(:@message, 'foo')
 
-		assert_equal 'foo',  @limiter.fetch_option(:test, default)
+		assert_equal 'foo',  @limiter.send(:fetch_option, :test, default)
 
 		worker.sidekiq_options_hash['limits'][:test] = nil
 		@limiter.instance_variable_set(:@options, nil)
-		assert_equal 'bar',  @limiter.fetch_option(:test, default)
+		assert_equal 'bar',  @limiter.send(:fetch_option, :test, default)
 
 		Sidekiq.options[:limiter][:test] = nil
-		assert_equal 'baz',  @limiter.fetch_option(:test, default)
+		assert_equal 'baz',  @limiter.send(:fetch_option, :test, default)
+	end
+
+
+	def test_worker_key_for_worker_uses_custom_worker_key
+		TestWorker.sidekiq_options(:limits => {:key => 'test_worker_key'})
+		@limiter.instance_variable_set(:@worker, TestWorker.new)
+		assert_equal 'sidekiq_extensions:limiter:test_worker_key', @limiter.send(:worker_key)
+	end
+
+
+	def test_worker_scopes_counts_returns_excected_value
+		TestWorker.sidekiq_options(:limits => @valid_limit_options)
+		@limiter.instance_variable_set(:@worker, TestWorker.new)
+		@limiter.instance_variable_set(:@message, @valid_message)
+		assert_equal true, @limiter.send(:allocate_worker)
+		Sidekiq.redis do |connection|
+			assert_equal [1, 1, 1, 1], @limiter.send(:worker_scopes_counts, connection)
+		end
 	end
 
 
@@ -224,8 +252,8 @@ class LimiterTest < MiniTest::Unit::TestCase
 			"#{SidekiqExtensions::Limiter::PER_QUEUE_KEY}:#{@valid_message['queue']}",
 			"#{SidekiqExtensions::Limiter::PER_HOST_KEY}:#{host_name}",
 			"#{SidekiqExtensions::Limiter::PER_PROCESS_KEY}:#{host_name}:1234",
-		]
-		assert_equal expected_values, @limiter.worker_scopes_keys
+		].map{|key_tail| "sidekiq_extensions:limiter:limiter_test:test_worker:#{key_tail}"}
+		assert_equal expected_values, @limiter.send(:worker_scopes_keys)
 	end
 
 end
