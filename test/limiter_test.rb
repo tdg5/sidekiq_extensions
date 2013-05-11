@@ -101,14 +101,6 @@ class LimiterTest < MiniTest::Unit::TestCase
 	end
 
 
-	def test_limiter_key_returns_expected_keys
-		assert_equal 'sidekiq_extensions:limiter', @limiter.send(:limiter_key)
-		Sidekiq.options[:namespace] = 'test'
-		assert_equal 'test:sidekiq_extensions:limiter', @limiter.send(:limiter_key)
-		Sidekiq.options[:namespace] = nil
-	end
-
-
 	def test_limiter_unregisters_worker_even_on_failure
 		expected = :register
 		@limiter.expects(:worker_scopes_counts).times(4).returns([0] * 4)

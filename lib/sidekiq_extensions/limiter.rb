@@ -1,3 +1,4 @@
+require 'sidekiq_extensions/utils'
 require 'redis-lock'
 require 'socket'
 
@@ -64,19 +65,13 @@ module SidekiqExtensions
 
 		def fetch_option(option_name, default = nil)
 			[options.fetch(option_name.to_s, nil), Sidekiq.options.fetch(:limiter, {}).fetch(option_name.to_sym, nil), default].compact.each do |option|
-				return option.call(@message) if option.respond_to?(:call)
-				return option
+				return option.respond_to?(:call) ? option.call(@message) : option
 			end
 		end
 
 
 		def limited_scopes
 			return options.keys.map(&:to_sym) & PRIORITIZED_COUNT_SCOPES
-		end
-
-
-		def limiter_key
-			return namespaceify(Sidekiq.options[:namespace], :sidekiq_extensions, :limiter)
 		end
 
 
@@ -87,11 +82,6 @@ module SidekiqExtensions
 
 		def max_retries
 			return fetch_option(:retry, MAX_RETRIES) || 0
-		end
-
-
-		def namespaceify(*components)
-			return components.compact.map(&:to_s).join(':')
 		end
 
 
@@ -115,11 +105,10 @@ module SidekiqExtensions
 
 
 		def update_worker_scopes(action, existing_connection = nil)
-			command = action == :register ? 'sadd' : 'srem'
 			adjuster = lambda do |connection|
 				connection.multi do
 					worker_scopes_keys.each do |worker_scope_key|
-						connection.send(command, worker_scope_key, worker_identity)
+						connection.send((action == :register ? 'sadd' : 'srem'), worker_scope_key, worker_identity)
 					end
 				end
 			end
@@ -154,12 +143,17 @@ module SidekiqExtensions
 
 
 		def worker_identity
-			return "#{Socket.gethostname}:#{Process.pid}-#{Thread.current.object_id}:default"
+			return @worker_identity ||= "#{Socket.gethostname}:#{Process.pid}-#{Thread.current.object_id}:default"
 		end
 
 
 		def worker_key
-			return @worker_key ||= namespaceify(limiter_key, fetch_option(:key, @worker.class.to_s.underscore.gsub('/', ':')))
+			return @worker_key ||= SidekiqExtensions.namespaceify(
+				Sidekiq.options[:namespace],
+				:sidekiq_extensions,
+				:limiter,
+				fetch_option(:key, @worker.class.to_s.underscore.gsub('/', ':'))
+			)
 		end
 
 
@@ -173,10 +167,10 @@ module SidekiqExtensions
 
 		def worker_scopes_keys
 			return @worker_scopes_keys ||= {
-				PER_REDIS_KEY => namespaceify(worker_key, PER_REDIS_KEY.to_s),
-				PER_QUEUE_KEY => namespaceify(worker_key, PER_QUEUE_KEY, @message['queue']),
-				PER_HOST_KEY => namespaceify(worker_key, PER_HOST_KEY, Socket.gethostname),
-				PER_PROCESS_KEY => namespaceify(worker_key, PER_PROCESS_KEY, Socket.gethostname, Process.pid),
+				PER_REDIS_KEY => SidekiqExtensions.namespaceify(worker_key, PER_REDIS_KEY.to_s),
+				PER_QUEUE_KEY => SidekiqExtensions.namespaceify(worker_key, PER_QUEUE_KEY, @message['queue']),
+				PER_HOST_KEY => SidekiqExtensions.namespaceify(worker_key, PER_HOST_KEY, Socket.gethostname),
+				PER_PROCESS_KEY => SidekiqExtensions.namespaceify(worker_key, PER_PROCESS_KEY, Socket.gethostname, Process.pid),
 			}.values_at(*limited_scopes)
 		end
 
