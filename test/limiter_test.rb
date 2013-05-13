@@ -35,34 +35,38 @@ class LimiterTest < MiniTest::Unit::TestCase
 	end
 
 
-	def test_allocate_worker_returns_false_if_lock_cannot_be_obtained
+	def test_allocate_worker_raise_error_if_lock_cannot_be_obtained
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		set_limited_worker
 		@limiter.instance_variable_set(:@message, @valid_message)
 		Redis::Namespace.any_instance.expects(:lock).once.raises(Redis::Lock::LockNotAcquired)
-		refute @limiter.send(:allocate_worker)
+		assert_raises(SidekiqExtensions::Limiter::CapacityLimitError) do
+			@limiter.send(:allocate_worker)
+		end
 	end
 
 
-	def test_allocate_worker_returns_false_if_no_capacity_available_after_locking
+	def test_allocate_worker_raises_error_if_no_capacity_available_after_locking
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		set_limited_worker
 		SidekiqExtensions::Limiter::LimitedWorker.any_instance.expects(:capacity_available?).twice.returns(true).then.returns(false)
-		refute @limiter.send(:allocate_worker)
+		assert_raises(SidekiqExtensions::Limiter::CapacityLimitError) do
+			@limiter.send(:allocate_worker)
+		end
 	end
 
 
-	def test_allocate_worker_returns_true_if_no_limit_met
+	def test_allocate_worker_returns_nil_if_no_limit_met
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		set_limited_worker
 		@limiter.instance_variable_set(:@message, @valid_message)
 		SidekiqExtensions::Limiter::LimitedWorker.any_instance.expects(:update_scopes).once
-		assert @limiter.send(:allocate_worker)
+		assert_nil @limiter.send(:allocate_worker)
 	end
 
 
 	def test_limiter_defers_to_worker_retry_method_if_available
-		@limiter.expects(:allocate_worker).returns(false)
+		@limiter.expects(:allocate_worker).raises(SidekiqExtensions::Limiter::CapacityLimitError)
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		worker = TestWorker.new
 		worker.expects(:respond_to?).with(:retry).returns(true)
@@ -73,7 +77,7 @@ class LimiterTest < MiniTest::Unit::TestCase
 
 
 	def test_limiter_retry_raises_error_if_retry_disabled
-		@limiter.expects(:allocate_worker).returns(false)
+		@limiter.expects(:allocate_worker).raises(SidekiqExtensions::Limiter::CapacityLimitError)
 		@valid_limit_options[:retry] = false
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		assert_raises(RuntimeError) do
@@ -83,7 +87,7 @@ class LimiterTest < MiniTest::Unit::TestCase
 
 
 	def test_limiter_retry_scheduling_increments_limiter_retry_count_and_sends_to_redis
-		@limiter.expects(:allocate_worker).returns(false)
+		@limiter.expects(:allocate_worker).raises(SidekiqExtensions::Limiter::CapacityLimitError)
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		@valid_message['limiter_retry_count'] = 1
 		Redis::Namespace.any_instance.expects(:zadd).once
@@ -94,7 +98,7 @@ class LimiterTest < MiniTest::Unit::TestCase
 
 
 	def test_limiter_retry_scheduling_raises_error_if_no_more_retries_left
-		@limiter.expects(:allocate_worker).returns(false)
+		@limiter.expects(:allocate_worker).raises(SidekiqExtensions::Limiter::CapacityLimitError)
 		@valid_limit_options[:retry] = 0
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		assert_raises(RuntimeError) do
@@ -104,7 +108,7 @@ class LimiterTest < MiniTest::Unit::TestCase
 
 
 	def test_limited_schedules_retry_if_unable_to_allocate_worker
-		@limiter.expects(:allocate_worker).returns(false)
+		@limiter.expects(:allocate_worker).raises(SidekiqExtensions::Limiter::CapacityLimitError)
 		@limiter.expects(:schedule_retry).once
 		TestWorker.sidekiq_options(:limits => @valid_limit_options)
 		@limiter.call(TestWorker.new, @valid_message, 'test') {}

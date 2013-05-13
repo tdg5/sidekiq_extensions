@@ -7,6 +7,8 @@ module SidekiqExtensions
 
 		MAX_RETRIES = 10
 
+		class CapacityLimitError < StandardError; end
+
 
 		def call(worker, message, queue)
 			@limited_worker = LimitedWorker.new(worker, message)
@@ -17,15 +19,14 @@ module SidekiqExtensions
 
 			@message, @queue = message, queue
 
-			if allocate_worker
-				begin
-					yield
-					return
-				ensure
-					@limited_worker.update_scopes(:unregister)
-				end
+			allocate_worker
+			begin
+				yield
+			ensure
+				@limited_worker.update_scopes(:unregister)
 			end
 
+		rescue CapacityLimitError
 			if worker.respond_to?(:retry)
 				worker.retry
 			else
@@ -37,15 +38,14 @@ module SidekiqExtensions
 
 		def allocate_worker
 			Sidekiq.redis do |connection|
-				return false unless @limited_worker.capacity_available?(connection)
+				raise CapacityLimitError unless @limited_worker.capacity_available?(connection)
 				connection.lock(@limited_worker.key) do |lock|
-					return false unless @limited_worker.capacity_available?(connection)
+					raise CapacityLimitError unless @limited_worker.capacity_available?(connection)
 					@limited_worker.update_scopes(:register, connection)
 				end
 			end
-			return true
 		rescue Redis::Lock::LockNotAcquired
-			return false
+			raise CapacityLimitError
 		end
 
 
