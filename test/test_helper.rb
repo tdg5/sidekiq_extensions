@@ -1,6 +1,9 @@
 require 'coveralls'
 Coveralls.wear!
 
+# Testing constant to keep Sidekiq happy
+$TESTING = true
+
 require 'sidekiq'
 require 'sidekiq/redis_connection'
 require 'minitest/unit'
